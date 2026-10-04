@@ -7,6 +7,9 @@ import { Bridge, type ChatContext } from "../core/bridge";
 import { Sound } from "../core/sound";
 import { State, type ChatMessage } from "../core/state";
 import type { ViewHost } from "./views";
+import {
+  CLAUDE_MODELS, PROVIDER_COLOR, geminiModels, modelLabel, providerOf, type ModelOption,
+} from "../core/models";
 
 let nextId = 1;
 
@@ -53,10 +56,24 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
   );
   const bar = h("div", { class: "chat-bar" }, input, screenBtn, send);
 
+  // Model picker: which model answers, and a one-click switch between Claude
+  // and Gemini without opening Settings.
+  const modelDot = h("i", { class: "model-dot" });
+  const modelName = h("span", {});
+  const modelBtn = h(
+    "button",
+    { class: "model-btn", title: "Change model" },
+    modelDot,
+    modelName,
+    svg(ICONS.chevronRight, 9, { stroke: 2.4 }),
+  );
+  const modelMenu = h("div", { class: "model-menu" });
+  const modelRow = h("div", { class: "model-row" }, modelBtn, modelMenu);
+
   const el = h(
     "div",
     { class: "view" },
-    h("div", { class: "card wash chat-card" }, h("div", { class: "chat-body" }, chipRow, log, bar)),
+    h("div", { class: "card wash chat-card" }, h("div", { class: "chat-body" }, chipRow, log, modelRow, bar)),
   );
   (el.querySelector(".card") as HTMLElement).style.setProperty("--wash", "rgba(99,102,241,0.5)");
 
@@ -111,6 +128,43 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
     }
   }
 
+  let menuOpen = false;
+
+  function modelChip(m: ModelOption): HTMLElement {
+    const chip = h(
+      "button",
+      { class: `model-chip${m.id === State.settings.model ? " current" : ""}` },
+      h("i", { class: "model-dot", style: `background:${PROVIDER_COLOR[providerOf(m.id)]}` }),
+      h("span", { text: m.label }),
+    );
+    chip.addEventListener("click", () => {
+      if (m.id !== State.settings.model) {
+        State.settings.model = m.id;
+        void Bridge.saveSettings(State.settings);
+        Sound.play("pop");
+      }
+      setMenuOpen(false);
+      input.focus();
+    });
+    return chip;
+  }
+
+  async function setMenuOpen(open: boolean) {
+    menuOpen = open;
+    modelRow.classList.toggle("open", open);
+    clear(modelMenu);
+    if (open) {
+      for (const m of CLAUDE_MODELS) modelMenu.append(modelChip(m));
+      // Refreshed on every open: the Google key may have just been saved in Settings.
+      const gemini = await geminiModels(true);
+      if (!menuOpen) return;
+      for (const m of gemini) modelMenu.append(modelChip(m));
+    }
+    State.notify();
+  }
+
+  modelBtn.addEventListener("click", () => void setMenuOpen(!menuOpen));
+
   send.addEventListener("click", () => void submit());
   screenBtn.addEventListener("click", () => {
     if (sending) return;
@@ -151,6 +205,9 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
         ? "Ask about your screen…"
         : State.chatHistory.length === 0 ? "Ask me anything…" : "Continue…";
       input.disabled = sending;
+      const model = State.settings.model;
+      if (modelName.textContent !== modelLabel(model)) modelName.textContent = modelLabel(model);
+      modelDot.style.background = PROVIDER_COLOR[providerOf(model)];
       (screenBtn as HTMLButtonElement).disabled = sending;
     },
     focus() {

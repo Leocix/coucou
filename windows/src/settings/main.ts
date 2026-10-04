@@ -6,6 +6,7 @@ import "./settings.css";
 import { Bridge, onEvent, type HookStatus } from "../core/bridge";
 import { DEFAULT_SETTINGS, type Settings } from "../core/state";
 import { h, clear } from "../views/dom";
+import { CLAUDE_MODELS, geminiModels } from "../core/models";
 
 let settings: Settings = { ...DEFAULT_SETTINGS };
 let version = "";
@@ -173,11 +174,6 @@ function claudeSection(status: HookStatus): HTMLElement {
 
 // ── Claude API section ────────────────────────────────────────────────────────
 
-const MODELS: [string, string][] = [
-  ["claude-opus-5", "Claude Opus 5"],
-  ["claude-sonnet-5", "Claude Sonnet 5"],
-  ["claude-haiku-4-5", "Claude Haiku 4.5"],
-];
 
 function apiSection(hasKey: boolean): HTMLElement {
   const dot = statusDot(hasKey);
@@ -232,9 +228,10 @@ function apiSection(hasKey: boolean): HTMLElement {
 
   const model = h("select", {}) as HTMLSelectElement;
   const claudeGroup = h("optgroup", { label: "Claude" }) as HTMLOptGroupElement;
-  for (const [id, label] of MODELS) claudeGroup.append(h("option", { value: id, text: label }));
+  for (const m of CLAUDE_MODELS) claudeGroup.append(h("option", { value: m.id, text: m.label }));
   model.append(claudeGroup, geminiGroup);
-  fillGeminiModels();
+  modelSelect = model;
+  void fillGeminiModels();
   model.addEventListener("change", () => {
     settings.model = model.value;
     void save();
@@ -259,20 +256,24 @@ function apiSection(hasKey: boolean): HTMLElement {
 /** Gemini options in the chat model picker, refilled once a Google key is saved. */
 const geminiGroup = h("optgroup", { label: "Gemini" }) as HTMLOptGroupElement;
 
-async function fillGeminiModels() {
-  const models = (await Bridge.geminiModels()) ?? [
-    { id: "gemini-2.5-flash", label: "gemini-2.5-flash" },
-    { id: "gemini-2.5-pro", label: "gemini-2.5-pro" },
-  ];
-  clear(geminiGroup);
-  for (const m of models) geminiGroup.append(h("option", { value: m.id, text: m.label }));
-  const select = geminiGroup.parentElement as HTMLSelectElement | null;
+/** The chat model picker, kept in step when the island switches model. */
+let modelSelect: HTMLSelectElement | null = null;
+
+function syncModelSelect() {
+  const select = modelSelect;
   if (!select) return;
   // Keep a model chosen earlier visible even if the list no longer offers it.
   if (![...select.options].some((o) => o.value === settings.model)) {
     select.append(h("option", { value: settings.model, text: settings.model }));
   }
   select.value = settings.model;
+}
+
+async function fillGeminiModels(refresh = false) {
+  const models = await geminiModels(refresh);
+  clear(geminiGroup);
+  for (const m of models) geminiGroup.append(h("option", { value: m.id, text: m.label }));
+  syncModelSelect();
 }
 
 function geminiSection(hasKey: boolean): HTMLElement {
@@ -302,7 +303,7 @@ function geminiSection(hasKey: boolean): HTMLElement {
 
   async function refresh() {
     draw((await Bridge.secretPresent(KEY)) ?? false);
-    await fillGeminiModels();
+    await fillGeminiModels(true);
   }
 
   saveBtn.addEventListener("click", async () => {
@@ -543,6 +544,7 @@ async function main() {
 
   void onEvent<Settings>("settings-changed", (s) => {
     settings = { ...settings, ...s };
+    syncModelSelect();
   });
 }
 

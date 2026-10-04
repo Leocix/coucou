@@ -898,6 +898,80 @@ input[type="range"]::-webkit-slider-thumb {
   transform: scale(0.94);
 }
 
+/* Model picker above the chat field. */
+.model-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 18px;
+}
+
+.model-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dim);
+  font: 500 11px var(--font);
+  cursor: default;
+  flex: 0 0 auto;
+}
+
+.model-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--ink-2);
+}
+
+.model-btn svg {
+  transition: transform 0.15s ease-out;
+}
+
+.model-row.open .model-btn svg {
+  transform: rotate(90deg);
+}
+
+.model-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: 0 0 6px;
+}
+
+.model-menu {
+  display: none;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.model-row.open .model-menu {
+  display: flex;
+}
+
+.model-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--ink-2);
+  font: 400 11px var(--font);
+  cursor: default;
+}
+
+.model-chip:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.model-chip.current {
+  outline: 1px solid rgba(255, 255, 255, 0.45);
+}
+
 /* "Ask about my screen": armed, the next message carries a screen capture. */
 .screen-btn {
   width: 28px;
