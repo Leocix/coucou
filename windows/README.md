@@ -75,14 +75,27 @@ Credential Manager**, never on disk and never in the interface — the island ca
 only ask whether a key exists. Same for every integration key.
 
 **Settings… → Gemini (Google AI)** takes a Google AI Studio key. Pick a Gemini
-model in the Claude section's model list and the chat talks to Gemini instead,
-through Google's OpenAI-compatible endpoint.
+model in the Claude section's model list, or with the model button above the
+chat field, and the chat talks to Gemini instead, through Google's
+OpenAI-compatible endpoint. Answers from both appear as they are written.
+
+**Ctrl+Shift+Space** opens the chat from any app. Turn it off in **Settings… →
+General**.
 
 **Ask about my screen**: the screen button next to the chat field arms a capture.
 The next message you send carries a screenshot of the display under the cursor,
 taken at that moment and sent only to the chat provider you picked. Nothing is
 captured until you click it, and each click covers one message. Windows only for
 now.
+
+Two more buttons sit beside it. **Crop** opens the Windows snipping overlay so
+you pick the area yourself; **Clipboard** sends what you copied, text or image.
+Both cover one message, like the screen button.
+
+**Alerts**: a failed Vercel deploy or a failed GitHub Actions run (on your five
+most recently pushed repos) shows on the island with a sound. For GitHub, a
+fine-grained token needs read access to **Actions**; a classic token needs
+`repo` for private repos.
 
 No telemetry. The only network requests Coucou makes are to the services you
 configure yourself.
