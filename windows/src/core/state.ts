@@ -90,8 +90,10 @@ export interface Settings {
   screen: "primary" | "cursor";
   autostart: boolean;
   hooksInstalled: boolean;
-  /** Claude model used by the chat. */
+  /** Chat model; a gemini-* id sends the chat to Gemini. */
   model: string;
+  /** Ctrl+Shift+Space opens the chat from anywhere. */
+  chatShortcut: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -106,6 +108,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autostart: false,
   hooksInstalled: false,
   model: "claude-opus-5",
+  chatShortcut: true,
 };
 
 type Listener = () => void;

@@ -503,6 +503,11 @@ function generalSection(): HTMLElement {
       h("label", { text: "Launch at startup" }),
       toggle(settings.autostart, (v) => { settings.autostart = v; void save(); }),
     ),
+    h("div", { class: "row" },
+      h("label", { text: "Chat shortcut" }),
+      toggle(settings.chatShortcut, (v) => { settings.chatShortcut = v; void save(); }),
+      h("span", { class: "hint", text: "Ctrl+Shift+Space opens the chat from any app" }),
+    ),
   );
 }
 

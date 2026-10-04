@@ -12,6 +12,7 @@ mod pipe;
 mod platform;
 mod secrets;
 mod settings;
+mod shortcut;
 mod tray;
 
 use std::process::Command;
@@ -64,13 +65,17 @@ fn boot(app: AppHandle, shared: State<Shared>) -> BootInfo {
 
 #[tauri::command]
 fn save_settings(app: AppHandle, shared: State<Shared>, settings: Settings) {
-    let (screen_changed, autostart_changed) = {
+    let (screen_changed, autostart_changed, shortcut_changed) = {
         let mut current = shared.settings.lock().unwrap();
         let screen_changed = current.screen != settings.screen;
         let autostart_changed = current.autostart != settings.autostart;
+        let shortcut_changed = current.chat_shortcut != settings.chat_shortcut;
         *current = settings.clone();
-        (screen_changed, autostart_changed)
+        (screen_changed, autostart_changed, shortcut_changed)
     };
+    if shortcut_changed {
+        shortcut::apply(&app, settings.chat_shortcut);
+    }
     if let Err(err) = settings::save(&settings) {
         eprintln!("[coucou] could not save settings: {err}");
     }
@@ -383,6 +388,7 @@ pub fn run() {
             let _ = app.emit_to(island::WINDOW_LABEL, "tray", "open".to_string());
         }))
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
+        .plugin(shortcut::plugin())
         .manage(Shared {
             settings: Mutex::new(loaded.clone()),
             gate: gate.clone(),
@@ -422,6 +428,7 @@ pub fn run() {
         .setup(move |app| {
             let handle = app.handle().clone();
             tray::build(&handle)?;
+            shortcut::apply(&handle, loaded.chat_shortcut);
             // Before the island: see create_settings_window.
             create_settings_window(&handle);
 

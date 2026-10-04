@@ -20,6 +20,13 @@ pub struct Settings {
     /// Defaulted explicitly so a settings.json written by an older build still loads.
     #[serde(default = "default_model")]
     pub model: String,
+    /// Ctrl+Shift+Space opens the chat from anywhere.
+    #[serde(default = "default_true")]
+    pub chat_shortcut: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_model() -> String {
@@ -43,6 +50,7 @@ impl Default for Settings {
             autostart: false,
             hooks_installed: false,
             model: default_model(),
+            chat_shortcut: true,
         }
     }
 }

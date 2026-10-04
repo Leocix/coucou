@@ -43,6 +43,10 @@ async function main() {
         setPaused(false);
         island.alert(State.defaultView());
         break;
+      case "chat": // Ctrl+Shift+Space
+        setPaused(false);
+        island.openChat();
+        break;
       case "pause":
         setPaused(!State.paused);
         if (State.paused) island.fsm.forceHidden();
