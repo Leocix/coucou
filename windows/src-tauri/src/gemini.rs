@@ -40,6 +40,7 @@ pub async fn send(
     model: &str,
     query: String,
     context: Option<ChatContext>,
+    on_text: impl Fn(&str) + Send + Sync,
 ) -> Result<ChatReply, String> {
     let key = secrets::get("google-api-key")
         .ok_or_else(|| "Gemini API key missing. Open settings.".to_string())?;
@@ -82,15 +83,13 @@ pub async fn send(
     messages.extend(chat.messages.lock().unwrap().iter().cloned());
     messages.push(json!({ "role": "user", "content": parts }));
 
-    let body = json!({ "model": model, "max_tokens": MAX_TOKENS, "messages": messages });
-    let response = post(&key, "/chat/completions", &body).await?;
-
-    let text = response
-        .pointer("/choices/0/message/content")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim()
-        .to_string();
+    let body = json!({
+        "model": model,
+        "max_tokens": MAX_TOKENS,
+        "stream": true,
+        "messages": messages,
+    });
+    let text = stream(&key, &body, &on_text).await?.trim().to_string();
     if text.is_empty() {
         return Err("No response text.".into());
     }
@@ -176,15 +175,48 @@ fn client(timeout: u64) -> Result<reqwest::Client, String> {
         .map_err(|e| e.to_string())
 }
 
-async fn post(key: &str, path: &str, body: &Value) -> Result<Value, String> {
-    let response = client(90)?
-        .post(format!("{BASE}{path}"))
+/// Streams the answer: each `data:` line carries the next piece in
+/// `choices[0].delta.content`, and `[DONE]` ends it.
+async fn stream(key: &str, body: &Value, on_text: &(impl Fn(&str) + Sync)) -> Result<String, String> {
+    let mut response = crate::sse::client()?
+        .post(format!("{BASE}/chat/completions"))
         .bearer_auth(key)
         .json(body)
         .send()
         .await
         .map_err(|e| format!("Network error: {e}"))?;
-    read(response).await
+    let status = response.status();
+    if !status.is_success() {
+        let text = response.text().await.map_err(|e| e.to_string())?;
+        return Err(format!("Gemini API {status}: {}", error_detail(&text)));
+    }
+
+    let mut reader = crate::sse::Reader::default();
+    let mut text = String::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| format!("Network error: {e}"))? {
+        for (_, data) in reader.feed(&chunk) {
+            if data == "[DONE]" {
+                return Ok(text);
+            }
+            if let Some(piece) = piece(&data)? {
+                text.push_str(&piece);
+                on_text(&piece);
+            }
+        }
+    }
+    Err("The answer was cut off. Try again.".into())
+}
+
+/// The text in one streamed chunk; an error object ends the turn.
+fn piece(data: &str) -> Result<Option<String>, String> {
+    let Ok(v) = serde_json::from_str::<Value>(data) else { return Ok(None) };
+    if v.get("error").is_some() || v.as_array().is_some() {
+        return Err(format!("Gemini API: {}", error_detail(data)));
+    }
+    Ok(v.pointer("/choices/0/delta/content")
+        .and_then(Value::as_str)
+        .filter(|t| !t.is_empty())
+        .map(str::to_string))
 }
 
 async fn get(key: &str, path: &str) -> Result<Value, String> {
@@ -229,6 +261,14 @@ mod tests {
     fn routes_only_gemini_models() {
         assert!(is_gemini("gemini-2.5-flash"));
         assert!(!is_gemini("claude-opus-5"));
+    }
+
+    #[test]
+    fn reads_streamed_pieces() {
+        let chunk = r#"{"choices":[{"index":0,"delta":{"role":"assistant","content":"Hola"}}]}"#;
+        assert_eq!(piece(chunk).unwrap().as_deref(), Some("Hola"));
+        assert_eq!(piece(r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#).unwrap(), None);
+        assert_eq!(piece(r#"{"error":{"message":"quota"}}"#).unwrap_err(), "Gemini API: quota");
     }
 
     #[test]

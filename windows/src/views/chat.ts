@@ -3,7 +3,7 @@
 
 import { h, svg, clear } from "./dom";
 import { ICONS } from "./icons";
-import { Bridge, type ChatContext } from "../core/bridge";
+import { Bridge, onEvent, type ChatContext } from "../core/bridge";
 import { Sound } from "../core/sound";
 import { State, type ChatMessage } from "../core/state";
 import type { ViewHost } from "./views";
@@ -98,6 +98,27 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
 
   let sending = false;
   let renderedCount = -1;
+  /** The answer being written, shown piece by piece while it streams in. */
+  let streaming: ChatMessage | null = null;
+  let heightQueued = false;
+
+  void onEvent<string>("chat-delta", (piece) => {
+    if (!sending) return;
+    if (!streaming) {
+      streaming = { id: nextId++, role: "assistant", content: "" };
+      State.chatHistory.push(streaming);
+    }
+    streaming.content += piece;
+    State.notify();
+    // The bubble grows line by line: re-measure once per frame, not per piece.
+    if (!heightQueued) {
+      heightQueued = true;
+      requestAnimationFrame(() => {
+        heightQueued = false;
+        onHeightChange();
+      });
+    }
+  });
   /**
    * What the next message carries, set by the buttons next to the field. Each
    * one covers a single message and is dropped once it is sent.
@@ -154,16 +175,20 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
 
     try {
       const reply = await Bridge.chatSend(prompt, context);
-      State.chatHistory.push({ id: nextId++, role: "assistant", content: reply.text });
+      if (streaming) streaming.content = reply.text;
+      else State.chatHistory.push({ id: nextId++, role: "assistant", content: reply.text });
       State.stateOverride = null;
       Sound.play("finish");
     } catch (err) {
+      // A cut-off or declined answer doesn't stay half-written in the chat.
+      if (streaming) State.chatHistory.splice(State.chatHistory.indexOf(streaming), 1);
       State.stateOverride = null;
       State.noteMessage = String(err).replace(/^Error:\s*/, "");
       State.view = "note";
       Sound.play("error");
     } finally {
       sending = false;
+      streaming = null;
       State.notify();
       onHeightChange();
       input.focus();
@@ -288,7 +313,8 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
         if (wantChip) chipRow.append(contextChip(wantChip));
       }
 
-      const thinking = State.stateOverride === "thinking";
+      // The dots wait for the first words; then the answer itself shows progress.
+      const thinking = State.stateOverride === "thinking" && !streaming;
       const count = State.chatHistory.length + (thinking ? 0.5 : 0);
       if (count !== renderedCount) {
         renderedCount = count;
@@ -296,6 +322,14 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
         for (const m of State.chatHistory) log.append(bubble(m));
         if (thinking) log.append(typingDots());
         log.scrollTop = log.scrollHeight;
+      } else {
+        // Same messages, but the last answer may have grown or been finalised.
+        const last = State.chatHistory[State.chatHistory.length - 1];
+        const reply = log.lastElementChild?.querySelector(".reply");
+        if (last?.role === "assistant" && reply && reply.textContent !== last.content) {
+          reply.textContent = last.content;
+          log.scrollTop = log.scrollHeight;
+        }
       }
 
       input.placeholder = attachment

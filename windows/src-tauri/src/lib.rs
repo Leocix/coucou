@@ -14,6 +14,7 @@ mod platform;
 mod secrets;
 mod settings;
 mod shortcut;
+mod sse;
 mod tray;
 
 use std::process::Command;
@@ -245,6 +246,7 @@ fn approval_decline(app: AppHandle, request_id: String) {
 /// One chat turn. The API key and any file bytes stay on the Rust side.
 #[tauri::command]
 async fn chat_send(
+    app: AppHandle,
     shared: State<'_, Shared>,
     chat: State<'_, Chat>,
     gemini_chat: State<'_, GeminiChat>,
@@ -252,10 +254,14 @@ async fn chat_send(
     context: Option<ChatContext>,
 ) -> Result<ChatReply, String> {
     let model = shared.settings.lock().unwrap().model.clone();
+    // Each piece of the answer goes to the island as it arrives.
+    let on_text = |piece: &str| {
+        let _ = app.emit_to(island::WINDOW_LABEL, "chat-delta", piece.to_string());
+    };
     if gemini::is_gemini(&model) {
-        gemini::send(&gemini_chat, &model, query, context).await
+        gemini::send(&gemini_chat, &model, query, context, on_text).await
     } else {
-        claude::send(&chat, &model, query, context).await
+        claude::send(&chat, &model, query, context, on_text).await
     }
 }
 
