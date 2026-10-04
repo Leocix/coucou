@@ -85,6 +85,11 @@ export const Bridge = {
   chatSend: (query: string, context: ChatContext | null) =>
     callOrThrow<{ text: string }>("chat_send", { query, context }),
   chatReset: () => call<void>("chat_reset"),
+  /** Reads the clipboard: text comes back, an image stays in Rust for the next message. */
+  clipboardRead: () => callOrThrow<ClipContent>("clipboard_read"),
+  /** Opens the Windows snipping overlay and resolves once the snip is in. */
+  captureArea: () => callOrThrow<ClipContent>("capture_area"),
+  clearPendingImage: () => call<void>("clear_pending_image"),
   /** Gemini models the saved Google key can use (a short fallback list without one). */
   geminiModels: () => call<{ id: string; label: string }[]>("gemini_models"),
   /** Copies a dropped file into the inbox. */
@@ -114,7 +119,13 @@ export type ChatContext =
   | { kind: "file"; name: string; path: string }
   | { kind: "window"; appName: string; title: string; url?: string }
   /** Rust captures the screen when the message is sent. */
-  | { kind: "screen" };
+  | { kind: "screen" }
+  /** The area capture or clipboard image waiting in Rust. */
+  | { kind: "image" };
+
+export type ClipContent =
+  | { kind: "text"; text: string; truncated: boolean }
+  | { kind: "image"; width: number; height: number };
 
 export interface DroppedFile {
   name: string;

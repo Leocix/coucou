@@ -39,6 +39,15 @@ function contextChip(label: string): HTMLElement {
   return chip;
 }
 
+type Attachment =
+  | { kind: "screen" }
+  | { kind: "image"; source: "area" | "clipboard"; label: string }
+  | { kind: "text"; text: string; label: string };
+
+function attachmentLabel(a: Attachment): string {
+  return a.kind === "screen" ? "Screen" : a.label;
+}
+
 export function buildPrompt(onHeightChange: () => void): ViewHost {
   const chipRow = h("div", { class: "chip-row" });
   const log = h("div", { class: "chat-log" });
@@ -49,12 +58,22 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
     spellcheck: "false",
   }) as HTMLInputElement;
   const send = h("button", { class: "send-btn", title: "Send" }, svg(ICONS.arrowUp, 11));
+  const clipBtn = h(
+    "button",
+    { class: "screen-btn", title: "Use what I copied" },
+    svg(ICONS.clipboard, 13),
+  );
+  const areaBtn = h(
+    "button",
+    { class: "screen-btn", title: "Capture an area of the screen" },
+    svg(ICONS.crop, 13),
+  );
   const screenBtn = h(
     "button",
     { class: "screen-btn", title: "Ask about my screen" },
     svg(ICONS.monitor, 13),
   );
-  const bar = h("div", { class: "chat-bar" }, input, screenBtn, send);
+  const bar = h("div", { class: "chat-bar" }, input, clipBtn, areaBtn, screenBtn, send);
 
   // Model picker: which model answers, and a one-click switch between Claude
   // and Gemini without opening Settings.
@@ -79,14 +98,33 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
 
   let sending = false;
   let renderedCount = -1;
-  /** Armed by the screen button: the next message carries a screen capture. */
-  let screenArmed = false;
+  /**
+   * What the next message carries, set by the buttons next to the field. Each
+   * one covers a single message and is dropped once it is sent.
+   */
+  let attachment: Attachment | null = null;
+  /** Waiting for the snipping overlay. */
+  let capturing = false;
 
-  function setScreenArmed(on: boolean) {
-    screenArmed = on;
-    screenBtn.classList.toggle("armed", on);
+  function setAttachment(next: Attachment | null) {
+    // An image waiting in Rust that the user dropped must not ride along later.
+    if (attachment?.kind === "image" && next?.kind !== "image") void Bridge.clearPendingImage();
+    attachment = next;
+    screenBtn.classList.toggle("armed", next?.kind === "screen");
+    areaBtn.classList.toggle("armed", next?.kind === "image" && next.source === "area");
+    clipBtn.classList.toggle(
+      "armed",
+      next?.kind === "text" || (next?.kind === "image" && next.source === "clipboard"),
+    );
     State.notify();
-    onHeightChange(); // the "Screen" chip comes and goes
+    onHeightChange(); // the chip comes and goes
+  }
+
+  function showError(message: string) {
+    State.noteMessage = message.replace(/^Error:\s*/, "");
+    State.view = "note";
+    Sound.play("error");
+    State.notify();
   }
 
   async function submit() {
@@ -102,16 +140,20 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
     onHeightChange();
 
     const file = State.droppedFile;
-    const context: ChatContext | null = screenArmed
-      ? { kind: "screen" }
-      : State.chatHistory.length === 1 && file
-        ? { kind: "file", name: file.name, path: file.path }
-        : null;
-    // One capture per click: the button disarms once the message is on its way.
-    if (screenArmed) setScreenArmed(false);
+    const sent = attachment;
+    let context: ChatContext | null =
+      State.chatHistory.length === 1 && file ? { kind: "file", name: file.name, path: file.path } : null;
+    let prompt = query;
+    if (sent?.kind === "screen") context = { kind: "screen" };
+    if (sent?.kind === "image") context = { kind: "image" };
+    if (sent?.kind === "text") prompt = `Text I copied:\n"""\n${sent.text}\n"""\n\n${query}`;
+    // One attachment per click. Rust takes a waiting image itself, so forget
+    // it here rather than asking Rust to drop it.
+    attachment = null;
+    if (sent) setAttachment(null);
 
     try {
-      const reply = await Bridge.chatSend(query, context);
+      const reply = await Bridge.chatSend(prompt, context);
       State.chatHistory.push({ id: nextId++, role: "assistant", content: reply.text });
       State.stateOverride = null;
       Sound.play("finish");
@@ -168,9 +210,64 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
   send.addEventListener("click", () => void submit());
   screenBtn.addEventListener("click", () => {
     if (sending) return;
-    setScreenArmed(!screenArmed);
-    Sound.play(screenArmed ? "attach" : "close");
+    const on = attachment?.kind !== "screen";
+    setAttachment(on ? { kind: "screen" } : null);
+    Sound.play(on ? "attach" : "close");
     input.focus();
+  });
+
+  clipBtn.addEventListener("click", async () => {
+    if (sending) return;
+    if (clipBtn.classList.contains("armed")) {
+      setAttachment(null);
+      Sound.play("close");
+      return;
+    }
+    try {
+      const content = await Bridge.clipboardRead();
+      if (content.kind === "text") {
+        const chars = content.text.length.toLocaleString();
+        setAttachment({
+          kind: "text",
+          text: content.text,
+          label: `Copied text · ${chars} chars${content.truncated ? " (cut)" : ""}`,
+        });
+      } else {
+        setAttachment({
+          kind: "image",
+          source: "clipboard",
+          label: `Copied image · ${content.width}×${content.height}`,
+        });
+      }
+      Sound.play("attach");
+      input.focus();
+    } catch (err) {
+      showError(String(err));
+    }
+  });
+
+  areaBtn.addEventListener("click", async () => {
+    if (sending || capturing) return;
+    if (areaBtn.classList.contains("armed")) {
+      setAttachment(null);
+      Sound.play("close");
+      return;
+    }
+    capturing = true;
+    areaBtn.classList.add("busy");
+    try {
+      const content = await Bridge.captureArea();
+      if (content.kind === "image") {
+        setAttachment({ kind: "image", source: "area", label: `Area · ${content.width}×${content.height}` });
+        Sound.play("attach");
+      }
+    } catch (err) {
+      showError(String(err));
+    } finally {
+      capturing = false;
+      areaBtn.classList.remove("busy");
+      input.focus();
+    }
   });
   input.addEventListener("keydown", (e) => {
     if ((e as KeyboardEvent).key === "Enter") {
@@ -184,7 +281,7 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
     el,
     sync() {
       const file = State.droppedFile;
-      const wantChip = screenArmed ? "Screen" : (file?.name ?? "");
+      const wantChip = attachment ? attachmentLabel(attachment) : (file?.name ?? "");
       if (chipRow.dataset.label !== wantChip) {
         chipRow.dataset.label = wantChip;
         clear(chipRow);
@@ -201,14 +298,14 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
         log.scrollTop = log.scrollHeight;
       }
 
-      input.placeholder = screenArmed
-        ? "Ask about your screen…"
+      input.placeholder = attachment
+        ? "Ask about it…"
         : State.chatHistory.length === 0 ? "Ask me anything…" : "Continue…";
       input.disabled = sending;
       const model = State.settings.model;
       if (modelName.textContent !== modelLabel(model)) modelName.textContent = modelLabel(model);
       modelDot.style.background = PROVIDER_COLOR[providerOf(model)];
-      (screenBtn as HTMLButtonElement).disabled = sending;
+      for (const b of [screenBtn, areaBtn, clipBtn]) (b as HTMLButtonElement).disabled = sending;
     },
     focus() {
       input.focus();

@@ -2,6 +2,7 @@
 
 mod capture;
 mod claude;
+mod clip;
 mod files;
 mod gemini;
 mod hooks;
@@ -264,6 +265,27 @@ fn chat_reset(chat: State<Chat>, gemini_chat: State<GeminiChat>) {
     gemini_chat.reset();
 }
 
+/// "Use clipboard": text comes back to the chat, an image waits in Rust.
+#[tauri::command]
+fn clipboard_read() -> Result<clip::ClipContent, String> {
+    clip::read()
+}
+
+/// "Capture an area": the Windows snipping overlay, then the snip from the clipboard.
+#[tauri::command]
+async fn capture_area(app: AppHandle) -> Result<clip::ClipContent, String> {
+    let content = clip::capture_area().await?;
+    // The island may have closed while the overlay was up: bring the chat back.
+    let _ = app.emit_to(island::WINDOW_LABEL, "tray", "chat".to_string());
+    Ok(content)
+}
+
+/// The chip was removed: drop the waiting image.
+#[tauri::command]
+fn clear_pending_image() {
+    clip::clear_pending();
+}
+
 /// Gemini models for the Settings picker.
 #[tauri::command]
 async fn gemini_models() -> Vec<gemini::ModelOption> {
@@ -416,6 +438,9 @@ pub fn run() {
             chat_send,
             chat_reset,
             gemini_models,
+            clipboard_read,
+            capture_area,
+            clear_pending_image,
             ingest_file,
             secret_present,
             secret_set,

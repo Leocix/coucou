@@ -64,12 +64,15 @@ pub async fn send(
             }
             text_prefix.push_str("\n\n");
         }
-        Some(ChatContext::Screen) => {
-            let shot = crate::capture::screen()?;
-            parts.push(image_part("image/png", &shot.png));
-            text_prefix.push_str("Screenshot of my screen, taken just now.\n\n");
-        }
         _ => {}
+    }
+    if let Some(png) = crate::capture::image_for(context.as_ref())? {
+        parts.insert(0, image_part("image/png", &png));
+        text_prefix.push_str(if matches!(context, Some(ChatContext::Screen)) {
+            "Screenshot of my screen, taken just now.\n\n"
+        } else {
+            "Image I captured or copied for this question.\n\n"
+        });
     }
 
     let user_text = format!("{text_prefix}{query}");

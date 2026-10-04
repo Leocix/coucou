@@ -12,8 +12,26 @@ pub struct Capture {
 
 pub fn screen() -> Result<Capture, String> {
     let (width, height, rgb) = grab()?;
+    from_rgb(width, height, rgb)
+}
+
+/// Downscales and encodes any RGB frame the same way as a screen capture.
+pub fn from_rgb(width: u32, height: u32, rgb: Vec<u8>) -> Result<Capture, String> {
     let (width, height, rgb) = downscale(width, height, rgb, MAX_SIDE);
     Ok(Capture { png: encode_png(width, height, &rgb)? })
+}
+
+/// The image a chat message carries, if its context asks for one: a fresh
+/// screen capture, or the area / clipboard image waiting in `clip`.
+pub fn image_for(context: Option<&crate::claude::ChatContext>) -> Result<Option<Vec<u8>>, String> {
+    use crate::claude::ChatContext;
+    match context {
+        Some(ChatContext::Screen) => Ok(Some(screen()?.png)),
+        Some(ChatContext::Image) => crate::clip::take_pending()
+            .map(Some)
+            .ok_or_else(|| "The image is gone. Capture it again.".to_string()),
+        _ => Ok(None),
+    }
 }
 
 fn encode_png(width: u32, height: u32, rgb: &[u8]) -> Result<Vec<u8>, String> {

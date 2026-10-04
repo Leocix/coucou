@@ -62,6 +62,8 @@ pub enum ChatContext {
     Window { app_name: String, title: String, url: Option<String> },
     /// A capture of the screen, taken when the message is sent.
     Screen,
+    /// The area capture or clipboard image waiting in `clip`.
+    Image,
 }
 
 #[derive(Serialize)]
@@ -100,18 +102,22 @@ pub async fn send(
                 }
                 content.push(json!({ "type": "text", "text": text }));
             }
-            Some(ChatContext::Screen) | None => {}
+            Some(ChatContext::Screen | ChatContext::Image) | None => {}
         }
     }
-    // Unlike files, a screen capture can ride along with any turn: the user
-    // asks for it each time with the screen button.
-    if matches!(context, Some(ChatContext::Screen)) {
-        let shot = crate::capture::screen()?;
+    // Unlike files, images can ride along with any turn: the user asks for one
+    // each time with the screen, area or clipboard button.
+    if let Some(png) = crate::capture::image_for(context.as_ref())? {
         content.push(json!({
             "type": "image",
-            "source": { "type": "base64", "media_type": "image/png", "data": base64(&shot.png) },
+            "source": { "type": "base64", "media_type": "image/png", "data": base64(&png) },
         }));
-        content.push(json!({ "type": "text", "text": "Screenshot of my screen, taken just now." }));
+        let note = if matches!(context, Some(ChatContext::Screen)) {
+            "Screenshot of my screen, taken just now."
+        } else {
+            "Image I captured or copied for this question."
+        };
+        content.push(json!({ "type": "text", "text": note }));
     }
     content.push(json!({ "type": "text", "text": query }));
 
