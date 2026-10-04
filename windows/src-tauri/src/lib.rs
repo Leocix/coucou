@@ -1,7 +1,9 @@
 // Coucou for Windows — app wiring and the commands the island calls.
 
+mod capture;
 mod claude;
 mod files;
+mod gemini;
 mod hooks;
 mod integrations;
 mod island;
@@ -22,6 +24,7 @@ use tauri_plugin_autostart::{ManagerExt, MacosLauncher};
 
 use claude::{Chat, ChatContext, ChatReply};
 use files::DroppedFile;
+use gemini::GeminiChat;
 use hooks::{HookPreview, HookStatus};
 use island::{PollGate, ScreenInfo};
 use pipe::Pending;
@@ -238,16 +241,28 @@ fn approval_decline(app: AppHandle, request_id: String) {
 async fn chat_send(
     shared: State<'_, Shared>,
     chat: State<'_, Chat>,
+    gemini_chat: State<'_, GeminiChat>,
     query: String,
     context: Option<ChatContext>,
 ) -> Result<ChatReply, String> {
     let model = shared.settings.lock().unwrap().model.clone();
-    claude::send(&chat, &model, query, context).await
+    if gemini::is_gemini(&model) {
+        gemini::send(&gemini_chat, &model, query, context).await
+    } else {
+        claude::send(&chat, &model, query, context).await
+    }
 }
 
 #[tauri::command]
-fn chat_reset(chat: State<Chat>) {
+fn chat_reset(chat: State<Chat>, gemini_chat: State<GeminiChat>) {
     chat.reset();
+    gemini_chat.reset();
+}
+
+/// Gemini models for the Settings picker.
+#[tauri::command]
+async fn gemini_models() -> Vec<gemini::ModelOption> {
+    gemini::models().await
 }
 
 /// Copies a dropped file into the inbox and reports its name back.
@@ -374,6 +389,7 @@ pub fn run() {
         })
         .manage(Pending::default())
         .manage(Chat::default())
+        .manage(GeminiChat::default())
         .invoke_handler(tauri::generate_handler![
             boot,
             save_settings,
@@ -393,6 +409,7 @@ pub fn run() {
             log_line,
             chat_send,
             chat_reset,
+            gemini_models,
             ingest_file,
             secret_present,
             secret_set,

@@ -23,6 +23,7 @@ export const ICONS = {
   // checkmark
   check: "M5 12.5 9.5 17 19 7.5",
   // arrow.up (send)
+  monitor: "M3 4.5h18v11.5H3V4.5zm1.8 1.8v7.9h14.4V6.3H4.8zM9 18h6v1.8H9V18z",
   arrowUp: "M12 4.5 5.5 11l1.5 1.5 4-4V19.5h2V8.5l4 4L18.5 11 12 4.5z",
   // exclamationmark
   bang: "M11 4h2v10h-2V4zm0 12.2h2v2.2h-2v-2.2z",

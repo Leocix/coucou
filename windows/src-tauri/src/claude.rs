@@ -22,7 +22,7 @@ const MAX_INLINE_TEXT: u64 = 200_000;
 
 pub const DEFAULT_MODEL: &str = "claude-opus-5";
 
-const SYSTEM_PROMPT: &str = "You are Mochi, a personal AI assistant living at the top of the user's screen. \
+pub(crate) const SYSTEM_PROMPT: &str = "You are Mochi, a personal AI assistant living at the top of the user's screen. \
 You have web search access and can help with absolutely anything — research, coding, finding places, recommendations, tasks, questions. \
 Respond in the user's language. Be thorough and complete — use as much detail as the task requires. \
 No markdown formatting (no **, no ##, no bullet dashes). Use plain text with line breaks.";
@@ -60,6 +60,8 @@ impl Chat {
 pub enum ChatContext {
     File { name: String, path: String },
     Window { app_name: String, title: String, url: Option<String> },
+    /// A capture of the screen, taken when the message is sent.
+    Screen,
 }
 
 #[derive(Serialize)]
@@ -98,8 +100,18 @@ pub async fn send(
                 }
                 content.push(json!({ "type": "text", "text": text }));
             }
-            None => {}
+            Some(ChatContext::Screen) | None => {}
         }
+    }
+    // Unlike files, a screen capture can ride along with any turn: the user
+    // asks for it each time with the screen button.
+    if matches!(context, Some(ChatContext::Screen)) {
+        let shot = crate::capture::screen()?;
+        content.push(json!({
+            "type": "image",
+            "source": { "type": "base64", "media_type": "image/png", "data": base64(&shot.png) },
+        }));
+        content.push(json!({ "type": "text", "text": "Screenshot of my screen, taken just now." }));
     }
     content.push(json!({ "type": "text", "text": query }));
 

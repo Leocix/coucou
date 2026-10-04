@@ -85,6 +85,8 @@ export const Bridge = {
   chatSend: (query: string, context: ChatContext | null) =>
     callOrThrow<{ text: string }>("chat_send", { query, context }),
   chatReset: () => call<void>("chat_reset"),
+  /** Gemini models the saved Google key can use (a short fallback list without one). */
+  geminiModels: () => call<{ id: string; label: string }[]>("gemini_models"),
   /** Copies a dropped file into the inbox. */
   ingestFile: (path: string) => callOrThrow<DroppedFile>("ingest_file", { path }),
   /** Only ever tells you whether a key exists — never its value. */
@@ -110,7 +112,9 @@ export interface IntegrationUpdate {
 
 export type ChatContext =
   | { kind: "file"; name: string; path: string }
-  | { kind: "window"; appName: string; title: string; url?: string };
+  | { kind: "window"; appName: string; title: string; url?: string }
+  /** Rust captures the screen when the message is sent. */
+  | { kind: "screen" };
 
 export interface DroppedFile {
   name: string;

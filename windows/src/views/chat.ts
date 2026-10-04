@@ -46,7 +46,12 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
     spellcheck: "false",
   }) as HTMLInputElement;
   const send = h("button", { class: "send-btn", title: "Send" }, svg(ICONS.arrowUp, 11));
-  const bar = h("div", { class: "chat-bar" }, input, send);
+  const screenBtn = h(
+    "button",
+    { class: "screen-btn", title: "Ask about my screen" },
+    svg(ICONS.monitor, 13),
+  );
+  const bar = h("div", { class: "chat-bar" }, input, screenBtn, send);
 
   const el = h(
     "div",
@@ -57,6 +62,15 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
 
   let sending = false;
   let renderedCount = -1;
+  /** Armed by the screen button: the next message carries a screen capture. */
+  let screenArmed = false;
+
+  function setScreenArmed(on: boolean) {
+    screenArmed = on;
+    screenBtn.classList.toggle("armed", on);
+    State.notify();
+    onHeightChange(); // the "Screen" chip comes and goes
+  }
 
   async function submit() {
     const query = input.value.trim();
@@ -71,8 +85,13 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
     onHeightChange();
 
     const file = State.droppedFile;
-    const context: ChatContext | null =
-      State.chatHistory.length === 1 && file ? { kind: "file", name: file.name, path: file.path } : null;
+    const context: ChatContext | null = screenArmed
+      ? { kind: "screen" }
+      : State.chatHistory.length === 1 && file
+        ? { kind: "file", name: file.name, path: file.path }
+        : null;
+    // One capture per click: the button disarms once the message is on its way.
+    if (screenArmed) setScreenArmed(false);
 
     try {
       const reply = await Bridge.chatSend(query, context);
@@ -93,6 +112,12 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
   }
 
   send.addEventListener("click", () => void submit());
+  screenBtn.addEventListener("click", () => {
+    if (sending) return;
+    setScreenArmed(!screenArmed);
+    Sound.play(screenArmed ? "attach" : "close");
+    input.focus();
+  });
   input.addEventListener("keydown", (e) => {
     if ((e as KeyboardEvent).key === "Enter") {
       e.preventDefault();
@@ -105,7 +130,7 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
     el,
     sync() {
       const file = State.droppedFile;
-      const wantChip = file?.name ?? "";
+      const wantChip = screenArmed ? "Screen" : (file?.name ?? "");
       if (chipRow.dataset.label !== wantChip) {
         chipRow.dataset.label = wantChip;
         clear(chipRow);
@@ -122,8 +147,11 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
         log.scrollTop = log.scrollHeight;
       }
 
-      input.placeholder = State.chatHistory.length === 0 ? "Ask me anything…" : "Continue…";
+      input.placeholder = screenArmed
+        ? "Ask about your screen…"
+        : State.chatHistory.length === 0 ? "Ask me anything…" : "Continue…";
       input.disabled = sending;
+      (screenBtn as HTMLButtonElement).disabled = sending;
     },
     focus() {
       input.focus();

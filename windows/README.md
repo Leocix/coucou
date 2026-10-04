@@ -74,6 +74,16 @@ It works from any terminal — Windows Terminal, PowerShell, VS Code, Git Bash.
 Credential Manager**, never on disk and never in the interface — the island can
 only ask whether a key exists. Same for every integration key.
 
+**Settings… → Gemini (Google AI)** takes a Google AI Studio key. Pick a Gemini
+model in the Claude section's model list and the chat talks to Gemini instead,
+through Google's OpenAI-compatible endpoint.
+
+**Ask about my screen**: the screen button next to the chat field arms a capture.
+The next message you send carries a screenshot of the display under the cursor,
+taken at that moment and sent only to the chat provider you picked. Nothing is
+captured until you click it, and each click covers one message. Windows only for
+now.
+
 No telemetry. The only network requests Coucou makes are to the services you
 configure yourself.
 
