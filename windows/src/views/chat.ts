@@ -7,8 +7,10 @@ import { Bridge, onEvent, type ChatContext } from "../core/bridge";
 import { Sound } from "../core/sound";
 import { State, type ChatMessage } from "../core/state";
 import type { ViewHost } from "./views";
+import { Speech } from "../core/speech";
 import {
-  CLAUDE_MODELS, PROVIDER_COLOR, geminiModels, modelLabel, providerOf, type ModelOption,
+  CLAUDE_MODELS, PROVIDER_COLOR, dictationModel, geminiLabel, geminiModels, modelLabel, providerOf,
+  splitGemini, type ModelOption,
 } from "../core/models";
 
 let nextId = 1;
@@ -68,12 +70,17 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
     { class: "screen-btn", title: "Capture an area of the screen" },
     svg(ICONS.crop, 13),
   );
+  const micBtn = h(
+    "button",
+    { class: "screen-btn", title: "Dictate (click again to stop)" },
+    svg(ICONS.mic, 13),
+  );
   const screenBtn = h(
     "button",
     { class: "screen-btn", title: "Ask about my screen" },
     svg(ICONS.monitor, 13),
   );
-  const bar = h("div", { class: "chat-bar" }, input, clipBtn, areaBtn, screenBtn, send);
+  const bar = h("div", { class: "chat-bar" }, input, micBtn, clipBtn, areaBtn, screenBtn, send);
 
   // Model picker: which model answers, and a one-click switch between Claude
   // and Gemini without opening Settings.
@@ -87,7 +94,27 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
     svg(ICONS.chevronRight, 9, { stroke: 2.4 }),
   );
   const modelMenu = h("div", { class: "model-menu" });
-  const modelRow = h("div", { class: "model-row" }, modelBtn, modelMenu);
+  const speakBtn = h("button", { class: "speak-btn" });
+  const modelRow = h(
+    "div",
+    { class: "model-row" },
+    h("div", { class: "model-head" }, modelBtn, Speech.available ? speakBtn : null),
+    modelMenu,
+  );
+
+  function syncSpeak() {
+    const on = Speech.enabled;
+    clear(speakBtn);
+    speakBtn.append(svg(on ? ICONS.speakerOn : ICONS.speakerOff, 12));
+    speakBtn.classList.toggle("on", on);
+    speakBtn.title = on ? "Reading answers aloud (click to stop)" : "Read answers aloud";
+  }
+  syncSpeak();
+  speakBtn.addEventListener("click", () => {
+    Speech.enabled = !Speech.enabled;
+    syncSpeak();
+    Sound.play("pop");
+  });
 
   const el = h(
     "div",
@@ -109,6 +136,7 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
       State.chatHistory.push(streaming);
     }
     streaming.content += piece;
+    Speech.feed(piece);
     State.notify();
     // The bubble grows line by line: re-measure once per frame, not per piece.
     if (!heightQueued) {
@@ -150,8 +178,9 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
 
   async function submit() {
     const query = input.value.trim();
-    if (!query || sending) return;
+    if (!query || sending || recording) return;
     input.value = "";
+    Speech.stop(); // a new question interrupts the last answer
     sending = true;
     Sound.play("send");
 
@@ -175,13 +204,20 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
 
     try {
       const reply = await Bridge.chatSend(prompt, context);
-      if (streaming) streaming.content = reply.text;
-      else State.chatHistory.push({ id: nextId++, role: "assistant", content: reply.text });
+      if (streaming) {
+        streaming.content = reply.text;
+        Speech.finish();
+      } else {
+        State.chatHistory.push({ id: nextId++, role: "assistant", content: reply.text });
+        Speech.feed(reply.text);
+        Speech.finish();
+      }
       State.stateOverride = null;
       Sound.play("finish");
     } catch (err) {
       // A cut-off or declined answer doesn't stay half-written in the chat.
       if (streaming) State.chatHistory.splice(State.chatHistory.indexOf(streaming), 1);
+      Speech.stop();
       State.stateOverride = null;
       State.noteMessage = String(err).replace(/^Error:\s*/, "");
       State.view = "note";
@@ -197,12 +233,14 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
 
   let menuOpen = false;
 
+  let showAllGemini = false;
+
   function modelChip(m: ModelOption): HTMLElement {
     const chip = h(
       "button",
-      { class: `model-chip${m.id === State.settings.model ? " current" : ""}` },
+      { class: `model-chip${m.id === State.settings.model ? " current" : ""}`, title: m.id },
       h("i", { class: "model-dot", style: `background:${PROVIDER_COLOR[providerOf(m.id)]}` }),
-      h("span", { text: m.label }),
+      h("span", { text: providerOf(m.id) === "gemini" ? geminiLabel(m.id) : m.label }),
     );
     chip.addEventListener("click", () => {
       if (m.id !== State.settings.model) {
@@ -221,16 +259,77 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
     modelRow.classList.toggle("open", open);
     clear(modelMenu);
     if (open) {
-      for (const m of CLAUDE_MODELS) modelMenu.append(modelChip(m));
+      modelMenu.append(modelGroup("Claude", CLAUDE_MODELS));
       // Refreshed on every open: the Google key may have just been saved in Settings.
-      const gemini = await geminiModels(true);
+      const { main, more } = splitGemini(await geminiModels(true));
       if (!menuOpen) return;
-      for (const m of gemini) modelMenu.append(modelChip(m));
+      // The model in use always shows, even when it sits under "More".
+      const current = more.find((m) => m.id === State.settings.model);
+      const shown = current && !showAllGemini ? [...main, current] : main;
+      const gemini = modelGroup("Gemini", shown);
+      if (more.length > 0) {
+        const toggle = h("button", {
+          class: "model-chip more",
+          text: showAllGemini ? "Fewer" : `More (${more.length})`,
+        });
+        toggle.addEventListener("click", () => {
+          showAllGemini = !showAllGemini;
+          void setMenuOpen(true);
+        });
+        gemini.querySelector(".model-chips")!.append(toggle);
+      }
+      modelMenu.append(gemini);
+      if (showAllGemini && more.length > 0) {
+        const all = h("div", { class: "model-chips model-all" });
+        for (const m of more) all.append(modelChip(m));
+        modelMenu.append(all);
+      }
     }
     State.notify();
+    onHeightChange();
+  }
+
+  function modelGroup(name: string, models: ModelOption[]): HTMLElement {
+    const chips = h("div", { class: "model-chips" });
+    for (const m of models) chips.append(modelChip(m));
+    return h("div", { class: "model-group" }, h("span", { class: "model-group-name", text: name }), chips);
   }
 
   modelBtn.addEventListener("click", () => void setMenuOpen(!menuOpen));
+
+  // Dictation: first click records, second click stops and writes what was
+  // said into the field, ready to edit or send.
+  let recording = false;
+  let transcribing = false;
+  micBtn.addEventListener("click", async () => {
+    if (sending || transcribing) return;
+    if (!recording) {
+      try {
+        await Bridge.dictationStart();
+        recording = true;
+        Speech.stop();
+        Sound.play("attach");
+      } catch (err) {
+        showError(String(err));
+      }
+      State.notify();
+      return;
+    }
+    recording = false;
+    transcribing = true;
+    State.notify();
+    try {
+      const text = await Bridge.dictationStop(await dictationModel());
+      input.value = input.value.trim() ? `${input.value.trim()} ${text}` : text;
+      Sound.play("pop");
+    } catch (err) {
+      showError(String(err));
+    } finally {
+      transcribing = false;
+      State.notify();
+      input.focus();
+    }
+  });
 
   send.addEventListener("click", () => void submit());
   screenBtn.addEventListener("click", () => {
@@ -332,10 +431,17 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
         }
       }
 
-      input.placeholder = attachment
-        ? "Ask about it…"
-        : State.chatHistory.length === 0 ? "Ask me anything…" : "Continue…";
-      input.disabled = sending;
+      input.placeholder = recording
+        ? "Listening… click the mic when you're done"
+        : transcribing
+          ? "Writing down what you said…"
+          : attachment
+            ? "Ask about it…"
+            : State.chatHistory.length === 0 ? "Ask me anything…" : "Continue…";
+      input.disabled = sending || transcribing;
+      micBtn.classList.toggle("recording", recording);
+      micBtn.classList.toggle("busy", transcribing);
+      (micBtn as HTMLButtonElement).disabled = sending;
       const model = State.settings.model;
       if (modelName.textContent !== modelLabel(model)) modelName.textContent = modelLabel(model);
       modelDot.style.background = PROVIDER_COLOR[providerOf(model)];

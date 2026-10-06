@@ -1,5 +1,6 @@
 // Coucou for Windows — app wiring and the commands the island calls.
 
+mod audio;
 mod capture;
 mod claude;
 mod clip;
@@ -286,6 +287,26 @@ async fn capture_area(app: AppHandle) -> Result<clip::ClipContent, String> {
     Ok(content)
 }
 
+/// Microphone button: starts recording.
+#[tauri::command]
+fn dictation_start() -> Result<(), String> {
+    audio::start()
+}
+
+/// Second click: stops, and returns what was said as text.
+#[tauri::command]
+async fn dictation_stop(model: String) -> Result<String, String> {
+    let wav = tauri::async_runtime::spawn_blocking(audio::stop)
+        .await
+        .map_err(|e| e.to_string())??;
+    gemini::transcribe(&model, &wav).await
+}
+
+#[tauri::command]
+fn dictation_cancel() {
+    audio::cancel();
+}
+
 /// The chip was removed: drop the waiting image.
 #[tauri::command]
 fn clear_pending_image() {
@@ -447,6 +468,9 @@ pub fn run() {
             clipboard_read,
             capture_area,
             clear_pending_image,
+            dictation_start,
+            dictation_stop,
+            dictation_cancel,
             ingest_file,
             secret_present,
             secret_set,

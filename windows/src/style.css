@@ -901,9 +901,37 @@ input[type="range"]::-webkit-slider-thumb {
 /* Model picker above the chat field. */
 .model-row {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  gap: 4px;
   min-height: 18px;
+}
+
+.model-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* Read answers aloud. */
+.speak-btn {
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dim);
+  display: grid;
+  place-items: center;
+  cursor: default;
+}
+
+.speak-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--ink-2);
+}
+
+.speak-btn.on {
+  color: #a5b4fc;
 }
 
 .model-btn {
@@ -942,13 +970,43 @@ input[type="range"]::-webkit-slider-thumb {
 
 .model-menu {
   display: none;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  max-height: 128px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+.model-row.open .model-menu {
+  display: flex;
+}
+
+.model-group {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.model-group-name {
+  flex: 0 0 44px;
+  font: 500 10px var(--font);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.model-chips {
+  display: flex;
   flex-wrap: wrap;
   gap: 4px;
   min-width: 0;
 }
 
-.model-row.open .model-menu {
-  display: flex;
+/* Every other Gemini model, under the Gemini row. */
+.model-all {
+  padding-left: 52px;
 }
 
 .model-chip {
@@ -966,6 +1024,16 @@ input[type="range"]::-webkit-slider-thumb {
 
 .model-chip:hover {
   background: rgba(255, 255, 255, 0.16);
+}
+
+.model-chip.more {
+  background: transparent;
+  color: var(--dim);
+}
+
+.model-chip.more:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--ink-2);
 }
 
 .model-chip.current {
@@ -994,6 +1062,18 @@ input[type="range"]::-webkit-slider-thumb {
 .screen-btn.armed {
   background: rgba(99, 102, 241, 0.85);
   color: #fff;
+}
+
+/* Dictation: recording until the mic is clicked again. */
+.screen-btn.recording {
+  background: rgba(239, 68, 68, 0.9);
+  color: #fff;
+  animation: rec-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes rec-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5); }
+  50% { box-shadow: 0 0 0 5px rgba(239, 68, 68, 0); }
 }
 
 .screen-btn.busy {

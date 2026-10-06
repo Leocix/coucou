@@ -175,6 +175,44 @@ fn client(timeout: u64) -> Result<reqwest::Client, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Dictation: Gemini turns the recording into text for the chat field, so
+/// it works whichever model then answers.
+pub async fn transcribe(model: &str, wav: &[u8]) -> Result<String, String> {
+    let key = secrets::get("google-api-key")
+        .ok_or_else(|| "Dictation uses Gemini: add a Google AI key in Settings.".to_string())?;
+    let body = json!({
+        "model": model,
+        "messages": [{
+            "role": "user",
+            "content": [
+                { "type": "text", "text": TRANSCRIBE_PROMPT },
+                { "type": "input_audio", "input_audio": { "data": base64_for(wav), "format": "wav" } },
+            ],
+        }],
+    });
+    let response = client(60)?
+        .post(format!("{BASE}/chat/completions"))
+        .bearer_auth(&key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
+    let text = read(response)
+        .await?
+        .pointer("/choices/0/message/content")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if text.is_empty() {
+        return Err("Nothing was heard. Check the microphone and try again.".into());
+    }
+    Ok(text)
+}
+
+const TRANSCRIBE_PROMPT: &str = "Transcribe this recording word for word, in the language spoken. \
+Reply with the transcript only: no quotes, no notes. If nothing is said, reply with nothing.";
+
 /// Streams the answer: each `data:` line carries the next piece in
 /// `choices[0].delta.content`, and `[DONE]` ends it.
 async fn stream(key: &str, body: &Value, on_text: &(impl Fn(&str) + Sync)) -> Result<String, String> {

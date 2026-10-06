@@ -90,6 +90,10 @@ export const Bridge = {
   /** Opens the Windows snipping overlay and resolves once the snip is in. */
   captureArea: () => callOrThrow<ClipContent>("capture_area"),
   clearPendingImage: () => call<void>("clear_pending_image"),
+  /** Microphone: start, then stop to get the transcript (Gemini does the listening). */
+  dictationStart: () => callOrThrow<void>("dictation_start"),
+  dictationStop: (model: string) => callOrThrow<string>("dictation_stop", { model }),
+  dictationCancel: () => call<void>("dictation_cancel"),
   /** Gemini models the saved Google key can use (a short fallback list without one). */
   geminiModels: () => call<{ id: string; label: string }[]>("gemini_models"),
   /** Copies a dropped file into the inbox. */
