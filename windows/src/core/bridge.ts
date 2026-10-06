@@ -85,6 +85,17 @@ export const Bridge = {
   chatSend: (query: string, context: ChatContext | null) =>
     callOrThrow<{ text: string }>("chat_send", { query, context }),
   chatReset: () => call<void>("chat_reset"),
+  /** Reads the clipboard: text comes back, an image stays in Rust for the next message. */
+  clipboardRead: () => callOrThrow<ClipContent>("clipboard_read"),
+  /** Opens the Windows snipping overlay and resolves once the snip is in. */
+  captureArea: () => callOrThrow<ClipContent>("capture_area"),
+  clearPendingImage: () => call<void>("clear_pending_image"),
+  /** Microphone: start, then stop to get the transcript (Gemini does the listening). */
+  dictationStart: () => callOrThrow<void>("dictation_start"),
+  dictationStop: (model: string) => callOrThrow<string>("dictation_stop", { model }),
+  dictationCancel: () => call<void>("dictation_cancel"),
+  /** Gemini models the saved Google key can use (a short fallback list without one). */
+  geminiModels: () => call<{ id: string; label: string }[]>("gemini_models"),
   /** Copies a dropped file into the inbox. */
   ingestFile: (path: string) => callOrThrow<DroppedFile>("ingest_file", { path }),
   /** Only ever tells you whether a key exists — never its value. */
@@ -110,7 +121,15 @@ export interface IntegrationUpdate {
 
 export type ChatContext =
   | { kind: "file"; name: string; path: string }
-  | { kind: "window"; appName: string; title: string; url?: string };
+  | { kind: "window"; appName: string; title: string; url?: string }
+  /** Rust captures the screen when the message is sent. */
+  | { kind: "screen" }
+  /** The area capture or clipboard image waiting in Rust. */
+  | { kind: "image" };
+
+export type ClipContent =
+  | { kind: "text"; text: string; truncated: boolean }
+  | { kind: "image"; width: number; height: number };
 
 export interface DroppedFile {
   name: string;

@@ -74,6 +74,39 @@ It works from any terminal — Windows Terminal, PowerShell, VS Code, Git Bash.
 Credential Manager**, never on disk and never in the interface — the island can
 only ask whether a key exists. Same for every integration key.
 
+**Settings… → Gemini (Google AI)** takes a Google AI Studio key. Pick a Gemini
+model in the Claude section's model list, or with the model button above the
+chat field, and the chat talks to Gemini instead, through Google's
+OpenAI-compatible endpoint. Answers from both appear as they are written.
+
+**Ctrl+Shift+Space** opens the chat from any app. Turn it off in **Settings… →
+General**.
+
+**Ask about my screen**: the screen button next to the chat field arms a capture.
+The next message you send carries a screenshot of the display under the cursor,
+taken at that moment and sent only to the chat provider you picked. Nothing is
+captured until you click it, and each click covers one message. Windows only for
+now.
+
+Two more buttons sit beside it. **Crop** opens the Windows snipping overlay so
+you pick the area yourself; **Clipboard** sends what you copied, text or image.
+Both cover one message, like the screen button.
+
+The model button lists the newest Gemini Flash, Pro and Flash Lite first;
+**More** shows every other model your key can use.
+
+**Voice**: the **mic** button records until you click it again, then Gemini
+writes what you said into the field (so dictation needs the Google key, whichever
+model answers). The recording stays in memory and is never saved. If nothing is
+recorded, check that Windows lets desktop apps use the microphone (Settings →
+Privacy & security → Microphone). The **speaker** above the field reads answers
+aloud with the voices installed in Windows.
+
+**Alerts**: a failed Vercel deploy or a failed GitHub Actions run (on your five
+most recently pushed repos) shows on the island with a sound. For GitHub, a
+fine-grained token needs read access to **Actions**; a classic token needs
+`repo` for private repos.
+
 No telemetry. The only network requests Coucou makes are to the services you
 configure yourself.
 

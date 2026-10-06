@@ -66,7 +66,7 @@ pub fn start(app: AppHandle) {
     spawn(app.clone(), "integration_vercel", 5, 30, poll_vercel);
     spawn(app.clone(), "integration_stripe", 6, 30, poll_stripe);
     spawn(app.clone(), "integration_resend", 6, 60, poll_resend);
-    spawn(app.clone(), "integration_github", 7, 300, poll_github);
+    spawn(app.clone(), "integration_github", 7, 120, poll_github);
     spawn(app.clone(), "integration_calcom", 8, 300, poll_calcom);
     spawn(app, "integration_notion", 9, 300, poll_notion);
 }
@@ -300,27 +300,93 @@ async fn poll_github(app: AppHandle) {
         .header("User-Agent", "Coucou")
         .send()
         .await;
-    let stars: i64 = match repos {
+    let list: Vec<Value> = match repos {
         Ok(r) if r.status().is_success() => r
             .json::<Value>()
             .await
             .ok()
             .and_then(|v| v.as_array().cloned())
-            .map(|list| {
-                list.iter()
-                    .filter_map(|r| r.get("stargazers_count").and_then(Value::as_i64))
-                    .sum()
-            })
-            .unwrap_or(0),
-        _ => 0,
+            .unwrap_or_default(),
+        _ => Vec::new(),
     };
+    let stars: i64 = list
+        .iter()
+        .filter_map(|r| r.get("stargazers_count").and_then(Value::as_i64))
+        .sum();
+
+    // CI: the latest finished workflow run across the repos pushed to most
+    // recently. A new failed run is what raises the alert.
+    let mut runs = Vec::new();
+    for repo in list.iter().take(CI_REPOS) {
+        let Some(name) = repo.get("full_name").and_then(Value::as_str) else { continue };
+        let response = http
+            .get(format!("https://api.github.com/repos/{name}/actions/runs?per_page=1&status=completed"))
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Accept", "application/vnd.github+json")
+            .header("User-Agent", "Coucou")
+            .send()
+            .await;
+        // No Actions, or a token without "Actions: read": skip the repo quietly.
+        let Ok(response) = response else { continue };
+        if !response.status().is_success() {
+            continue;
+        }
+        let json: Value = response.json().await.unwrap_or(json!({}));
+        if let Some(run) = json.pointer("/workflow_runs/0").and_then(|r| parse_run(name, r)) {
+            runs.push(run);
+        }
+    }
+    let last_run = latest_run(runs);
+    let event = last_run.as_ref().and_then(|run| {
+        let id = run.get("id")?.as_str()?;
+        if !is_new("github_ci", id) || !run_failed(run) {
+            return None;
+        }
+        Some(IntegrationEvent {
+            success: false,
+            label: format!("CI failed · {}", run.get("repo")?.as_str()?),
+            detail: Some(format!(
+                "{} on {}",
+                run.get("workflow")?.as_str()?,
+                run.get("branch")?.as_str()?
+            )),
+        })
+    });
 
     emit(&app, IntegrationUpdate {
         id: "integration_github",
-        data: json!({ "totalRepos": public + private, "totalStars": stars }),
+        data: json!({ "totalRepos": public + private, "totalStars": stars, "lastRun": last_run }),
         error: None,
-        event: None,
+        event,
     });
+}
+
+/// How many of the most recently pushed repos are checked for CI runs.
+const CI_REPOS: usize = 5;
+
+fn parse_run(repo: &str, run: &Value) -> Option<Value> {
+    Some(json!({
+        "id": run.get("id")?.as_i64()?.to_string(),
+        "repo": repo.rsplit('/').next().unwrap_or(repo),
+        "workflow": run.get("name").and_then(Value::as_str).unwrap_or("Workflow"),
+        "branch": run.get("head_branch").and_then(Value::as_str).unwrap_or(""),
+        "conclusion": run.get("conclusion").and_then(Value::as_str).unwrap_or(""),
+        "url": run.get("html_url").and_then(Value::as_str).unwrap_or(""),
+        "updatedAt": run.get("updated_at").and_then(Value::as_str).unwrap_or(""),
+    }))
+}
+
+/// ISO 8601 timestamps in UTC sort as strings.
+fn latest_run(runs: Vec<Value>) -> Option<Value> {
+    runs.into_iter()
+        .max_by(|a, b| a["updatedAt"].as_str().cmp(&b["updatedAt"].as_str()))
+}
+
+fn run_failed(run: &Value) -> bool {
+    matches!(
+        run.get("conclusion").and_then(Value::as_str),
+        Some("failure" | "timed_out" | "startup_failure")
+    )
 }
 
 // ── Vercel ────────────────────────────────────────────────────────────────────
@@ -761,5 +827,31 @@ fn fmt_value(v: &Value) -> String {
         Value::Array(a) => format!("[{}]", a.len()),
         Value::Object(_) => "{…}".into(),
         other => other.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn picks_the_latest_run_and_spots_failures() {
+        let run = |id: i64, conclusion: &str, at: &str| {
+            parse_run("Leocix/coucou", &json!({
+                "id": id, "name": "CI", "head_branch": "main",
+                "conclusion": conclusion, "updated_at": at,
+            }))
+            .unwrap()
+        };
+        let latest = latest_run(vec![
+            run(1, "success", "2026-10-04T10:00:00Z"),
+            run(2, "failure", "2026-10-04T11:00:00Z"),
+        ])
+        .unwrap();
+        assert_eq!(latest["id"], "2");
+        assert_eq!(latest["repo"], "coucou");
+        assert!(run_failed(&latest));
+        assert!(!run_failed(&run(3, "success", "x")));
+        assert!(!run_failed(&run(4, "cancelled", "x")));
     }
 }

@@ -334,6 +334,14 @@ export class Island {
     this.fsm.reveal();
   }
 
+  /** The global shortcut: open on the chat with the cursor in the field. */
+  openChat() {
+    this.alert("prompt");
+    // Already on the chat, the view switch that normally grabs focus won't fire.
+    void Bridge.focusWindow(true);
+    window.setTimeout(() => this.views.get("prompt")?.focus?.(), 120);
+  }
+
   /** An alert stopped waiting for an answer: let the island auto-close again. */
   dropPin() {
     this.fsm.pinned = false;

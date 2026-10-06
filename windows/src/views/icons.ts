@@ -23,6 +23,11 @@ export const ICONS = {
   // checkmark
   check: "M5 12.5 9.5 17 19 7.5",
   // arrow.up (send)
+  clipboard: "M9 2.5h6v2h3.5v17h-13v-17H9v-2zm1.8 1.6v1.8h2.4V4.1h-2.4zM7.3 6.3v13.4h9.4V6.3h-1.9v1.4H9.2V6.3H7.3z",
+  crop: "M6.2 2.5H8v13.7h13.5V18H17.8v3.5H16V18H6.2V8H2.5V6.2h3.7V2.5zM9.8 6.2H17.8v8.2H16V8H9.8V6.2z",
+  // mic
+  mic: "M12 2.5a3.3 3.3 0 0 0-3.3 3.3v5.7a3.3 3.3 0 0 0 6.6 0V5.8A3.3 3.3 0 0 0 12 2.5zm-6.6 8.2h1.8a4.8 4.8 0 0 0 9.6 0h1.8a6.6 6.6 0 0 1-5.7 6.5v2.5h3v1.8H8.1v-1.8h3v-2.5a6.6 6.6 0 0 1-5.7-6.5z",
+  monitor: "M3 4.5h18v11.5H3V4.5zm1.8 1.8v7.9h14.4V6.3H4.8zM9 18h6v1.8H9V18z",
   arrowUp: "M12 4.5 5.5 11l1.5 1.5 4-4V19.5h2V8.5l4 4L18.5 11 12 4.5z",
   // exclamationmark
   bang: "M11 4h2v10h-2V4zm0 12.2h2v2.2h-2v-2.2z",

@@ -22,7 +22,7 @@ const MAX_INLINE_TEXT: u64 = 200_000;
 
 pub const DEFAULT_MODEL: &str = "claude-opus-5";
 
-const SYSTEM_PROMPT: &str = "You are Mochi, a personal AI assistant living at the top of the user's screen. \
+pub(crate) const SYSTEM_PROMPT: &str = "You are Mochi, a personal AI assistant living at the top of the user's screen. \
 You have web search access and can help with absolutely anything — research, coding, finding places, recommendations, tasks, questions. \
 Respond in the user's language. Be thorough and complete — use as much detail as the task requires. \
 No markdown formatting (no **, no ##, no bullet dashes). Use plain text with line breaks.";
@@ -60,6 +60,10 @@ impl Chat {
 pub enum ChatContext {
     File { name: String, path: String },
     Window { app_name: String, title: String, url: Option<String> },
+    /// A capture of the screen, taken when the message is sent.
+    Screen,
+    /// The area capture or clipboard image waiting in `clip`.
+    Image,
 }
 
 #[derive(Serialize)]
@@ -68,13 +72,14 @@ pub struct ChatReply {
     pub text: String,
 }
 
-/// One chat turn. Returns the assistant's text, or a message the island shows
-/// in the note view.
+/// One chat turn, streamed: `on_text` gets each piece of the answer as it
+/// arrives. Returns the whole text, or a message the island shows in the note view.
 pub async fn send(
     chat: &Chat,
     model: &str,
     query: String,
     context: Option<ChatContext>,
+    on_text: impl Fn(&str) + Send + Sync,
 ) -> Result<ChatReply, String> {
     let key = secrets::get("anthropic-api-key")
         .ok_or_else(|| "API key missing. Open settings.".to_string())?;
@@ -98,8 +103,22 @@ pub async fn send(
                 }
                 content.push(json!({ "type": "text", "text": text }));
             }
-            None => {}
+            Some(ChatContext::Screen | ChatContext::Image) | None => {}
         }
+    }
+    // Unlike files, images can ride along with any turn: the user asks for one
+    // each time with the screen, area or clipboard button.
+    if let Some(png) = crate::capture::image_for(context.as_ref())? {
+        content.push(json!({
+            "type": "image",
+            "source": { "type": "base64", "media_type": "image/png", "data": base64(&png) },
+        }));
+        let note = if matches!(context, Some(ChatContext::Screen)) {
+            "Screenshot of my screen, taken just now."
+        } else {
+            "Image I captured or copied for this question."
+        };
+        content.push(json!({ "type": "text", "text": note }));
     }
     content.push(json!({ "type": "text", "text": query }));
 
@@ -111,37 +130,32 @@ pub async fn send(
         "system": SYSTEM_PROMPT,
         "tools": [{ "type": "web_search_20260209", "name": "web_search", "max_uses": 5 }],
         "fallbacks": "default",
+        "stream": true,
         "messages": chat.snapshot(),
     });
 
-    let response = match call(&key, &body).await {
-        Ok(v) => v,
+    let message = match stream(&key, &body, &on_text).await {
+        Ok(m) => m,
         Err(err) => {
             chat.pop(); // keep the history consistent with what the model saw
             return Err(err);
         }
     };
 
-    // A policy decline comes back as HTTP 200 with stop_reason "refusal".
-    if response.get("stop_reason").and_then(Value::as_str) == Some("refusal") {
+    // A policy decline ends the stream with stop_reason "refusal". Whatever
+    // text came before it is dropped by the island.
+    if message.stop_reason.as_deref() == Some("refusal") {
         chat.pop();
-        let why = response
-            .get("stop_details")
+        let why = message
+            .stop_details
+            .as_ref()
             .and_then(|d| d.get("explanation"))
             .and_then(Value::as_str)
             .unwrap_or("Claude declined this one.");
         return Err(why.to_string());
     }
 
-    let Some(blocks) = response.get("content").and_then(Value::as_array).cloned() else {
-        chat.pop();
-        return Err("Unexpected API response.".into());
-    };
-
-    // Store the whole content — tool_use / tool_result blocks included — so the
-    // next turn has the right context.
-    chat.push(json!({ "role": "assistant", "content": blocks.clone() }));
-
+    let blocks = message.blocks;
     let text = blocks
         .iter()
         .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
@@ -152,18 +166,137 @@ pub async fn send(
         .to_string();
 
     if text.is_empty() {
+        chat.pop();
         return Err("No response text.".into());
     }
+
+    // Store the content — server tool blocks included — so the next turn has
+    // the right context.
+    chat.push(json!({ "role": "assistant", "content": history_blocks(blocks) }));
     Ok(ChatReply { text })
 }
 
-async fn call(key: &str, body: &Value) -> Result<Value, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(90))
-        .build()
-        .map_err(|e| e.to_string())?;
+/// The message as it is rebuilt from the stream.
+#[derive(Default)]
+struct Message {
+    blocks: Vec<Value>,
+    /// Partial JSON of tool inputs, by block index, parsed when the block ends.
+    inputs: Vec<(usize, String)>,
+    stop_reason: Option<String>,
+    stop_details: Option<Value>,
+}
 
-    let response = client
+impl Message {
+    /// Applies one event. Returns the text to show, if the event carries some.
+    fn apply(&mut self, event: &str, data: &str) -> Result<Option<String>, String> {
+        let Ok(v) = serde_json::from_str::<Value>(data) else { return Ok(None) };
+        let index = v.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+        match event {
+            "content_block_start" => {
+                let block = v.get("content_block").cloned().unwrap_or(Value::Null);
+                if self.blocks.len() <= index {
+                    self.blocks.resize(index + 1, Value::Null);
+                }
+                self.blocks[index] = block;
+            }
+            "content_block_delta" => {
+                let delta = v.get("delta").cloned().unwrap_or(Value::Null);
+                let Some(block) = self.blocks.get_mut(index) else { return Ok(None) };
+                match delta.get("type").and_then(Value::as_str) {
+                    Some("text_delta") => {
+                        let piece = delta.get("text").and_then(Value::as_str).unwrap_or("");
+                        let text = block.get("text").and_then(Value::as_str).unwrap_or("");
+                        block["text"] = Value::String(format!("{text}{piece}"));
+                        return Ok(Some(piece.to_string()));
+                    }
+                    Some("citations_delta") => {
+                        if let Some(citation) = delta.get("citation") {
+                            if !block.get("citations").is_some_and(Value::is_array) {
+                                block["citations"] = json!([]);
+                            }
+                            block["citations"].as_array_mut().unwrap().push(citation.clone());
+                        }
+                    }
+                    Some("input_json_delta") => {
+                        let piece = delta.get("partial_json").and_then(Value::as_str).unwrap_or("");
+                        match self.inputs.iter_mut().find(|(i, _)| *i == index) {
+                            Some((_, json)) => json.push_str(piece),
+                            None => self.inputs.push((index, piece.to_string())),
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            "content_block_stop" => {
+                if let Some(pos) = self.inputs.iter().position(|(i, _)| *i == index) {
+                    let (_, json) = self.inputs.remove(pos);
+                    if let (Some(block), Ok(input)) =
+                        (self.blocks.get_mut(index), serde_json::from_str::<Value>(&json))
+                    {
+                        block["input"] = input;
+                    }
+                }
+            }
+            "message_delta" => {
+                let delta = v.get("delta");
+                if let Some(reason) = delta.and_then(|d| d.get("stop_reason")).and_then(Value::as_str) {
+                    self.stop_reason = Some(reason.to_string());
+                }
+                if let Some(details) = delta.and_then(|d| d.get("stop_details")) {
+                    if !details.is_null() {
+                        self.stop_details = Some(details.clone());
+                    }
+                }
+            }
+            "error" => {
+                let detail = v
+                    .pointer("/error/message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("The answer stopped.");
+                return Err(format!("Claude API: {detail}"));
+            }
+            _ => {}
+        }
+        Ok(None)
+    }
+}
+
+/// After a fallback mid-answer, only text and paired server tool blocks from
+/// before the switch may be sent back; the fallback marker itself is dropped.
+fn history_blocks(blocks: Vec<Value>) -> Vec<Value> {
+    let kind = |b: &Value| b.get("type").and_then(Value::as_str).unwrap_or("").to_string();
+    let last_fallback = blocks.iter().rposition(|b| kind(b) == "fallback");
+    let result_ids: Vec<String> = blocks
+        .iter()
+        .filter(|b| kind(b).ends_with("_tool_result"))
+        .filter_map(|b| b.get("tool_use_id").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    blocks
+        .into_iter()
+        .enumerate()
+        .filter(|(i, b)| {
+            let k = kind(b);
+            if b.is_null() || k == "fallback" {
+                return false;
+            }
+            if last_fallback.is_some_and(|f| *i < f) {
+                return match k.as_str() {
+                    "text" => true,
+                    "server_tool_use" => b
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| result_ids.iter().any(|r| r == id)),
+                    _ => k.ends_with("_tool_result"),
+                };
+            }
+            true
+        })
+        .map(|(_, b)| b)
+        .collect()
+}
+
+async fn stream(key: &str, body: &Value, on_text: &(impl Fn(&str) + Sync)) -> Result<Message, String> {
+    let mut response = crate::sse::client()?
         .post(ENDPOINT)
         .header("x-api-key", key)
         .header("anthropic-version", ANTHROPIC_VERSION)
@@ -175,8 +308,8 @@ async fn call(key: &str, body: &Value) -> Result<Value, String> {
         .map_err(|e| format!("Network error: {e}"))?;
 
     let status = response.status();
-    let text = response.text().await.map_err(|e| e.to_string())?;
     if !status.is_success() {
+        let text = response.text().await.map_err(|e| e.to_string())?;
         // Surface the API's own message, which is what makes a bad key obvious.
         let detail = serde_json::from_str::<Value>(&text)
             .ok()
@@ -189,7 +322,24 @@ async fn call(key: &str, body: &Value) -> Result<Value, String> {
             .unwrap_or_else(|| text.chars().take(200).collect());
         return Err(format!("Claude API {status}: {detail}"));
     }
-    serde_json::from_str(&text).map_err(|e| format!("Bad API response: {e}"))
+
+    let mut reader = crate::sse::Reader::default();
+    let mut message = Message::default();
+    let mut done = false;
+    while let Some(chunk) = response.chunk().await.map_err(|e| format!("Network error: {e}"))? {
+        for (event, data) in reader.feed(&chunk) {
+            if event == "message_stop" {
+                done = true;
+            }
+            if let Some(text) = message.apply(&event, &data)? {
+                on_text(&text);
+            }
+        }
+    }
+    if !done {
+        return Err("The answer was cut off. Try again.".into());
+    }
+    Ok(message)
 }
 
 /// PDF → document block, image → image block, text/code → inline text.
@@ -248,7 +398,70 @@ fn base64(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::base64;
+    use super::*;
+
+    fn run(events: &[(&str, &str)]) -> (Message, String) {
+        let mut m = Message::default();
+        let mut shown = String::new();
+        for (e, d) in events {
+            if let Some(t) = m.apply(e, d).unwrap() {
+                shown.push_str(&t);
+            }
+        }
+        (m, shown)
+    }
+
+    #[test]
+    fn rebuilds_text_and_tool_blocks_from_the_stream() {
+        let (m, shown) = run(&[
+            ("message_start", r#"{"message":{}}"#),
+            ("content_block_start", r#"{"index":0,"content_block":{"type":"server_tool_use","id":"s1","name":"web_search","input":{}}}"#),
+            ("content_block_delta", r#"{"index":0,"delta":{"type":"input_json_delta","partial_json":"{\"query\":"}}"#),
+            ("content_block_delta", r#"{"index":0,"delta":{"type":"input_json_delta","partial_json":"\"tacos\"}"}}"#),
+            ("content_block_stop", r#"{"index":0}"#),
+            ("content_block_start", r#"{"index":1,"content_block":{"type":"text","text":""}}"#),
+            ("content_block_delta", r#"{"index":1,"delta":{"type":"text_delta","text":"Ho"}}"#),
+            ("content_block_delta", r#"{"index":1,"delta":{"type":"citations_delta","citation":{"url":"u"}}}"#),
+            ("content_block_delta", r#"{"index":1,"delta":{"type":"text_delta","text":"la"}}"#),
+            ("content_block_stop", r#"{"index":1}"#),
+            ("message_delta", r#"{"delta":{"stop_reason":"end_turn","stop_details":null}}"#),
+        ]);
+        assert_eq!(shown, "Hola");
+        assert_eq!(m.blocks[0]["input"]["query"], "tacos");
+        assert_eq!(m.blocks[1]["text"], "Hola");
+        assert_eq!(m.blocks[1]["citations"][0]["url"], "u");
+        assert_eq!(m.stop_reason.as_deref(), Some("end_turn"));
+        assert!(m.stop_details.is_none());
+    }
+
+    #[test]
+    fn stream_error_event_fails_the_turn() {
+        let mut m = Message::default();
+        let err = m.apply("error", r#"{"error":{"type":"overloaded_error","message":"Overloaded"}}"#);
+        assert_eq!(err.unwrap_err(), "Claude API: Overloaded");
+    }
+
+    #[test]
+    fn history_drops_unpaired_blocks_before_a_fallback() {
+        let blocks = vec![
+            json!({"type":"text","text":"a"}),
+            json!({"type":"thinking","thinking":"x"}),
+            json!({"type":"server_tool_use","id":"s1"}),
+            json!({"type":"server_tool_use","id":"s2"}),
+            json!({"type":"web_search_tool_result","tool_use_id":"s1"}),
+            json!({"type":"fallback"}),
+            json!({"type":"thinking","thinking":"y"}),
+            json!({"type":"text","text":"b"}),
+        ];
+        let kept: Vec<String> = history_blocks(blocks)
+            .iter()
+            .map(|b| format!("{}{}", b["type"].as_str().unwrap(), b["id"].as_str().unwrap_or("")))
+            .collect();
+        assert_eq!(
+            kept,
+            ["text", "server_tool_uses1", "web_search_tool_result", "thinking", "text"]
+        );
+    }
 
     #[test]
     fn base64_matches_rfc4648_vectors() {

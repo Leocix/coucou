@@ -1,7 +1,11 @@
 // Coucou for Windows — app wiring and the commands the island calls.
 
+mod audio;
+mod capture;
 mod claude;
+mod clip;
 mod files;
+mod gemini;
 mod hooks;
 mod integrations;
 mod island;
@@ -10,6 +14,8 @@ mod pipe;
 mod platform;
 mod secrets;
 mod settings;
+mod shortcut;
+mod sse;
 mod tray;
 
 use std::process::Command;
@@ -22,6 +28,7 @@ use tauri_plugin_autostart::{ManagerExt, MacosLauncher};
 
 use claude::{Chat, ChatContext, ChatReply};
 use files::DroppedFile;
+use gemini::GeminiChat;
 use hooks::{HookPreview, HookStatus};
 use island::{PollGate, ScreenInfo};
 use pipe::Pending;
@@ -61,13 +68,17 @@ fn boot(app: AppHandle, shared: State<Shared>) -> BootInfo {
 
 #[tauri::command]
 fn save_settings(app: AppHandle, shared: State<Shared>, settings: Settings) {
-    let (screen_changed, autostart_changed) = {
+    let (screen_changed, autostart_changed, shortcut_changed) = {
         let mut current = shared.settings.lock().unwrap();
         let screen_changed = current.screen != settings.screen;
         let autostart_changed = current.autostart != settings.autostart;
+        let shortcut_changed = current.chat_shortcut != settings.chat_shortcut;
         *current = settings.clone();
-        (screen_changed, autostart_changed)
+        (screen_changed, autostart_changed, shortcut_changed)
     };
+    if shortcut_changed {
+        shortcut::apply(&app, settings.chat_shortcut);
+    }
     if let Err(err) = settings::save(&settings) {
         eprintln!("[coucou] could not save settings: {err}");
     }
@@ -236,18 +247,76 @@ fn approval_decline(app: AppHandle, request_id: String) {
 /// One chat turn. The API key and any file bytes stay on the Rust side.
 #[tauri::command]
 async fn chat_send(
+    app: AppHandle,
     shared: State<'_, Shared>,
     chat: State<'_, Chat>,
+    gemini_chat: State<'_, GeminiChat>,
     query: String,
     context: Option<ChatContext>,
 ) -> Result<ChatReply, String> {
     let model = shared.settings.lock().unwrap().model.clone();
-    claude::send(&chat, &model, query, context).await
+    // Each piece of the answer goes to the island as it arrives.
+    let on_text = |piece: &str| {
+        let _ = app.emit_to(island::WINDOW_LABEL, "chat-delta", piece.to_string());
+    };
+    if gemini::is_gemini(&model) {
+        gemini::send(&gemini_chat, &model, query, context, on_text).await
+    } else {
+        claude::send(&chat, &model, query, context, on_text).await
+    }
 }
 
 #[tauri::command]
-fn chat_reset(chat: State<Chat>) {
+fn chat_reset(chat: State<Chat>, gemini_chat: State<GeminiChat>) {
     chat.reset();
+    gemini_chat.reset();
+}
+
+/// "Use clipboard": text comes back to the chat, an image waits in Rust.
+#[tauri::command]
+fn clipboard_read() -> Result<clip::ClipContent, String> {
+    clip::read()
+}
+
+/// "Capture an area": the Windows snipping overlay, then the snip from the clipboard.
+#[tauri::command]
+async fn capture_area(app: AppHandle) -> Result<clip::ClipContent, String> {
+    let content = clip::capture_area().await?;
+    // The island may have closed while the overlay was up: bring the chat back.
+    let _ = app.emit_to(island::WINDOW_LABEL, "tray", "chat".to_string());
+    Ok(content)
+}
+
+/// Microphone button: starts recording.
+#[tauri::command]
+fn dictation_start() -> Result<(), String> {
+    audio::start()
+}
+
+/// Second click: stops, and returns what was said as text.
+#[tauri::command]
+async fn dictation_stop(model: String) -> Result<String, String> {
+    let wav = tauri::async_runtime::spawn_blocking(audio::stop)
+        .await
+        .map_err(|e| e.to_string())??;
+    gemini::transcribe(&model, &wav).await
+}
+
+#[tauri::command]
+fn dictation_cancel() {
+    audio::cancel();
+}
+
+/// The chip was removed: drop the waiting image.
+#[tauri::command]
+fn clear_pending_image() {
+    clip::clear_pending();
+}
+
+/// Gemini models for the Settings picker.
+#[tauri::command]
+async fn gemini_models() -> Vec<gemini::ModelOption> {
+    gemini::models().await
 }
 
 /// Copies a dropped file into the inbox and reports its name back.
@@ -368,12 +437,14 @@ pub fn run() {
             let _ = app.emit_to(island::WINDOW_LABEL, "tray", "open".to_string());
         }))
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
+        .plugin(shortcut::plugin())
         .manage(Shared {
             settings: Mutex::new(loaded.clone()),
             gate: gate.clone(),
         })
         .manage(Pending::default())
         .manage(Chat::default())
+        .manage(GeminiChat::default())
         .invoke_handler(tauri::generate_handler![
             boot,
             save_settings,
@@ -393,6 +464,13 @@ pub fn run() {
             log_line,
             chat_send,
             chat_reset,
+            gemini_models,
+            clipboard_read,
+            capture_area,
+            clear_pending_image,
+            dictation_start,
+            dictation_stop,
+            dictation_cancel,
             ingest_file,
             secret_present,
             secret_set,
@@ -405,6 +483,7 @@ pub fn run() {
         .setup(move |app| {
             let handle = app.handle().clone();
             tray::build(&handle)?;
+            shortcut::apply(&handle, loaded.chat_shortcut);
             // Before the island: see create_settings_window.
             create_settings_window(&handle);
 

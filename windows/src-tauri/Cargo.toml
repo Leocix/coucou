@@ -17,15 +17,23 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
+tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# Encodes the screen capture sent with "Ask about my screen".
+png = "0.17"
+# Clipboard text and images: "Use clipboard" and the area capture.
+arboard = "3"
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
 windows = { version = "0.61", features = [
   "Win32_Foundation",
+  "Win32_System_DataExchange",
+  "Win32_Graphics_Gdi",
+  "Win32_Media_Audio",
   "Win32_Security",
   "Win32_Security_Authorization",
   "Win32_System_Ole",

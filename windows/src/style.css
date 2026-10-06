@@ -898,6 +898,192 @@ input[type="range"]::-webkit-slider-thumb {
   transform: scale(0.94);
 }
 
+/* Model picker above the chat field. */
+.model-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 18px;
+}
+
+.model-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* Read answers aloud. */
+.speak-btn {
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dim);
+  display: grid;
+  place-items: center;
+  cursor: default;
+}
+
+.speak-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--ink-2);
+}
+
+.speak-btn.on {
+  color: #a5b4fc;
+}
+
+.model-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dim);
+  font: 500 11px var(--font);
+  cursor: default;
+  flex: 0 0 auto;
+}
+
+.model-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--ink-2);
+}
+
+.model-btn svg {
+  transition: transform 0.15s ease-out;
+}
+
+.model-row.open .model-btn svg {
+  transform: rotate(90deg);
+}
+
+.model-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: 0 0 6px;
+}
+
+.model-menu {
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  max-height: 128px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+.model-row.open .model-menu {
+  display: flex;
+}
+
+.model-group {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.model-group-name {
+  flex: 0 0 44px;
+  font: 500 10px var(--font);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.model-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* Every other Gemini model, under the Gemini row. */
+.model-all {
+  padding-left: 52px;
+}
+
+.model-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--ink-2);
+  font: 400 11px var(--font);
+  cursor: default;
+}
+
+.model-chip:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.model-chip.more {
+  background: transparent;
+  color: var(--dim);
+}
+
+.model-chip.more:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--ink-2);
+}
+
+.model-chip.current {
+  outline: 1px solid rgba(255, 255, 255, 0.45);
+}
+
+/* "Ask about my screen": armed, the next message carries a screen capture. */
+.screen-btn {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--dim);
+  display: grid;
+  place-items: center;
+  cursor: default;
+  transition: background 0.12s ease-out, color 0.12s ease-out, transform 0.08s ease-out;
+}
+
+.screen-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.screen-btn.armed {
+  background: rgba(99, 102, 241, 0.85);
+  color: #fff;
+}
+
+/* Dictation: recording until the mic is clicked again. */
+.screen-btn.recording {
+  background: rgba(239, 68, 68, 0.9);
+  color: #fff;
+  animation: rec-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes rec-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5); }
+  50% { box-shadow: 0 0 0 5px rgba(239, 68, 68, 0); }
+}
+
+.screen-btn.busy {
+  animation: typing 0.9s ease-in-out infinite;
+}
+
+.screen-btn:active {
+  transform: scale(0.94);
+}
+
 /* ── Drop zone ──────────────────────────────────────────────────────────── */
 
 .drop-card {
